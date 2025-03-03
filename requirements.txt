@@ -4,6 +4,5 @@ pandas
 numpy
 PyPDF2
 streamlit
-chromadb
 sentence-transformers
 sqlite3

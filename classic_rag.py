@@ -1,7 +1,7 @@
 import os
 # from dotenv import load_dotenv
 # import openai
-import chromadb
+# import chromadb
 from sentence_transformers import SentenceTransformer
 import cohere
 import qdrant_client
