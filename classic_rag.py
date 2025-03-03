@@ -1,5 +1,5 @@
 import os
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 # import openai
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -17,7 +17,7 @@ import pandas as pd
 import streamlit as st
 
 # Load environment variables from .env file
-load_dotenv(override=True)
+# load_dotenv(override=True)
 
 # Retrieve the API key
 # cohere_key = os.getenv("COHERE_API_KEY")
