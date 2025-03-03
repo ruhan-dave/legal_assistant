@@ -1,0 +1,7 @@
+qdrant-client
+cohere
+openai
+pandas
+numpy
+PyPDF2
+streamlit

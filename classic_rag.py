@@ -14,19 +14,23 @@ from qdrant_client.models import VectorParams, Distance
 from qdrant_client import models
 import numpy as np
 import pandas as pd
-
+import streamlit as st
 
 # Load environment variables from .env file
 load_dotenv(override=True)
 
 # Retrieve the API key
-cohere_key = os.getenv("COHERE_API_KEY")
+# cohere_key = os.getenv("COHERE_API_KEY")
+cohore_key = st.secrets["cohere"]["api_key"]
 
 # Initialize clients
-cohere_client = cohere.ClientV2(cohere_key)
+cohere_client = cohere.ClientV2(api_key=cohore_key)
 
-qdrant_key = os.getenv("QDRANT_API_KEY")
-qdrant_host = os.getenv("QDRANT_HOST")
+#qdrant_key = os.getenv("QDRANT_API_KEY")
+#qdrant_host = os.getenv("QDRANT_HOST")
+
+qdrant_key = st.secrets["qdrant"]["key"]
+qdrant_host = st.secrets["qdrant"]["host"]
 
 
 def process_pdf_to_text(file_path: str, num_threads: int = 4) -> str:
@@ -44,16 +48,17 @@ def process_pdf_to_text(file_path: str, num_threads: int = 4) -> str:
         FileNotFoundError: If the file does not exist.
         ValueError: If the file is not a PDF.
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
+    # if not os.path.exists(file_path):
+        # raise FileNotFoundError(f"File not found: {file_path}")
 
-    if not file_path.lower().endswith(".pdf"):
-        raise ValueError(f"File is not a PDF: {file_path}")
+    # if not file_path.lower().endswith(".pdf"):
+        # raise ValueError(f"File is not a PDF: {file_path}")
 
     try:
-        with open(file_path, 'rb') as file:
-            reader = PdfReader(file)
-            num_pages = len(reader.pages)
+        if file_path:
+            with open(file_path, 'rb') as file:
+                reader = PdfReader(file)
+                num_pages = len(reader.pages)
 
             # Use ThreadPoolExecutor to process pages in parallel
             with ThreadPoolExecutor(max_workers=num_threads) as executor:
@@ -83,12 +88,45 @@ def customize_chunking(text, chunk_size=150):
         list_of_chunks.append(chunk)
     return list_of_chunks
 
-def retrieve_top_chunks(query:str, collection_name, chunks, n=5):
+def embedding(list_strings: List[str]):
+    response = cohere_client.embed(
+        texts=list_strings,
+        model="embed-english-light-v3.0",
+        input_type="search_document",
+        embedding_types=["float"]
+    )
+    return response # ["results"][0]["text"]
+
+def create_collection_and_upsert(client, embedding_floats):
+    client.create_collection(
+        collection_name="new-collection",
+        vectors_config=VectorParams(size=np.array(embedding_floats).shape[1], 
+                                    distance=Distance.COSINE))  # Ensure 384 is correct)
+
+    client.upsert(
+        collection_name="new-collection",
+        points=models.Batch(
+            ids=[i for i in range(len(embedding_floats))],  # Unique IDs for each embedding
+            payloads=[{"text": f"Document {i}"} for i in range(len(embedding_floats))],  # Optional metadata
+            vectors=embedding_floats,  # Ensure embeddings are a List[List[float]]
+        ),
+    )
+
+    st.write(len(embedding_floats), "points upserted successfully.")
+
+def retrieve_top_chunks(client, query:str, collection_name, list_chunks, n=5):
     # Fetch all stored points
-    stored_points = qdrant_client.scroll(collection_name="daves-rag", with_vectors=True, limit=1000)[0]
-    query_chunks = query_chunking([query])
+    query_chunks = embedding([query])
+    doc_chunks = embedding(list_chunks)
+
     query_embeddings = query_chunks.embeddings.float
-    
+    doc_embeddings = doc_chunks.embeddings.float
+
+    # Put floats into collections
+    create_collection_and_upsert(client, doc_embeddings)
+
+    stored_points = client.scroll(collection_name="new-collection", with_vectors=True, limit=1000)[0]
+
     # Extract embeddings & IDs
     chunk_embeddings = [point.vector for point in stored_points]
     stored_ids = [point.id for point in stored_points]
@@ -102,23 +140,22 @@ def retrieve_top_chunks(query:str, collection_name, chunks, n=5):
         subquery_scores = [cosine_similarity(query_embedding, chunk_embedding) for query_embedding in query_embeddings]
         similarities.append(np.mean(subquery_scores))  # Average similarity if multiple subqueries
 
-    print("Similarity scores:", similarities)
+    # print("Similarity scores:", similarities)
 
     # --- Retrieve Top `n` Chunks ---
     top_indices = np.argsort(similarities)[::-1][:n]  # Sort and get top `n`
 
     # Retrieve top similar document chunks
-    top_chunks_after_retrieval = [chunks[i] for i in top_indices]
+    top_chunks_after_retrieval = [list_chunks[i] for i in top_indices]
 
     return top_chunks_after_retrieval
-
 
 def get_llm_output(top_chunks, ch, query):
     preamble = """
     ## Task & Context
     You give answers to user's questions with precision, based on chunked document string you receive.
     You should focus on serving the user's needs as best you can, which can be wide-ranging but always relevant to the document string.
-    If you are not sure about the answer, you can ask for clarification or provide a general response saying you are not sure.
+    If you are not sure about the answer, you can provide a general response saying you are not sure.
     
     ## Style Guide
     Unless the user asks for a different style of answer, you should answer in full sentences, using proper grammar and spelling.
@@ -139,4 +176,4 @@ def get_llm_output(top_chunks, ch, query):
     )
 
     print("Final answer:")
-    print(response.message.content[0].text)
+    return response.message.content[0].text
