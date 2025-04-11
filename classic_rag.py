@@ -152,6 +152,44 @@ def retrieve_top_chunks(client, query:str, collection_name, list_chunks, n=5):
 
     return top_chunks_after_retrieval
 
+def query_chunking(query):
+    response = cohere_client.embed(
+        texts=query,
+        model="embed-english-light-v3.0",
+        input_type="search_query",
+        embedding_types=["float"]
+    )
+    return response # ["results"][0]["text"]
+
+def retrieve_top_chunks(query:str, collection_name, chunks, n=5):
+    # Fetch all stored points
+    stored_points = qdrant_client.scroll(collection_name="daves-rag", with_vectors=True, limit=1000)[0]
+    query_chunks = query_chunking([query])
+    query_embeddings = query_chunks.embeddings.float
+    
+    # Extract embeddings & IDs
+    chunk_embeddings = [point.vector for point in stored_points]
+    stored_ids = [point.id for point in stored_points]
+    
+    def cosine_similarity(a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    # --- Compute Similarity Scores ---
+    similarities = []
+    for chunk_embedding in chunk_embeddings:
+        subquery_scores = [cosine_similarity(query_embedding, chunk_embedding) for query_embedding in query_embeddings]
+        similarities.append(np.mean(subquery_scores))  # Average similarity if multiple subqueries
+
+    print("Similarity scores:", similarities)
+
+    # --- Retrieve Top `n` Chunks ---
+    top_indices = np.argsort(similarities)[::-1][:n]  # Sort and get top `n`
+
+    # Retrieve top similar document chunks
+    top_chunks_after_retrieval = [chunks[i] for i in top_indices]
+
+    return top_chunks_after_retrieval
+
 def get_llm_output(top_chunks, ch, query):
     preamble = """
     ## Task & Context
